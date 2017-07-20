@@ -1,6 +1,9 @@
 # limpa area de trabalho do R
 rm(list = ls())
 
+# bibliotecas
+library(MASS)
+
 # funcao que calcula a diferenca em segundos de dois horarios
 diferenca_em_segundos <- function(hora_depois, hora_antes="00:00:00") {
   antes <- as.numeric(substr(hora_antes, start=1, stop=2)) * 3600 +
@@ -18,89 +21,16 @@ diferenca_em_segundos <- function(hora_depois, hora_antes="00:00:00") {
 normalizar <- function(x) if (min(x) == max(x)) 0.5 else (x-min(x))/(max(x)-min(x))
 
 ## inicio da preparacao de dados
-
-arquivos = c(160801, 160802, 160803, 160804, 160805, 160808, 160809, 160810, 160811, 160812, 160815, 160816, 160817, 160818, 160819, 160822, 160823, 160824, 160825, 160826, 160829, 160830, 160831)
-
-# unifica arquivos diarios
-services <- NULL
-for (i in 1:length(arquivos)) {
-  temp <- read.csv(paste("/home/f8676628/ws_kdz/local/zOSsrc/arquivos/D", arquivos[i], ".csv", sep = ""), header=FALSE, sep=";")
-  temp$dt <- as.Date(paste("20", arquivos[i], sep = ""), format = "%Y%m%d")
-  
-  if (is.null(services)) {
-    services <- temp
-  } else {
-    services <- rbind(services, temp)
-  }
-}
-
-# muda nomes das colunas
-names(services) <- c("dependencia", "queue_id", "sequence", "mci", "funcionario", "status", "entity", "priority", "arrival_time", "start_time", "end_time", "reneging_time", "servico", "dif_bsb", "date")
+services <- read.csv("/home/mourao/queueing_delay_prediction/data/services.csv", stringsAsFactors = TRUE)
 
 # todos as datas coletadas
 these_days <- sort(as.character(unique(services$date)))
-
-# remove variavel inutil
-services$dif_bsb <- NULL
-
-## mascarar dados e substituir codigos
-
-# dependencias
-depes <- sort(unique(services$dependencia))
-tabela_depes <- data.frame(branch_id = seq(1:length(depes)), dependencia = depes)
-services <- merge(tabela_depes, services)
-services$dependencia <- NULL
-
-# mci
-clientes <- sort(unique(services$mci))
-tabela_clientes <- data.frame(client_id = seq(1:length(clientes)), mci = clientes)
-tabela_clientes$client_id[tabela_clientes$mci == 0] <- NA
-services <- merge(services, tabela_clientes)
-services$mci <- NULL
-
-# funcionario
-funcionarios <- sort(unique(services$funcionario))
-tabela_funcionarios <-  data.frame(cashier = seq(1:length(funcionarios)), funcionario = funcionarios)
-tabela_funcionarios$cashier[1:2] <- NA
-services <- merge(services, tabela_funcionarios)
-services$funcionario <- NULL
-
-# servico
-x <- sort(unique(services$servico))
-y <- head(LETTERS, length(x))
-tabela_servicos <- data.frame(servico = x, service_type = y)
-services <- merge(services, tabela_servicos)
-services$servico <- NULL
-
-# status
-services$status[services$status == 10] <- "waiting"
-services$status[services$status == 20] <- "started"
-services$status[services$status == 30] <- "reneged"
-services$status[services$status == 40] <- "finished"
-services$status[services$status == 15] <- "finished"
-services$status <- as.factor(services$status)
-
-# entity
-services$entity <- as.character(services$entity)
-services$entity[services$entity == "0"] <- NA
-services$entity[services$entity == "1"] <- "person"
-services$entity[services$entity == "2"] <- "company"
-services$entity <- as.factor(services$entity)
-
-# priority
-services$priority <- as.factor(services$priority)
-levels(services$priority)[levels(services$priority) != "0"] <- "TRUE"
-levels(services$priority)[levels(services$priority) == "0"] <- "FALSE"
 
 ## calcular tempos
 
 services$arrival_time <- as.character(services$arrival_time)
 services$start_time <- as.character(services$start_time)
 services$end_time <- as.character(services$end_time)
-services$reneging_time <- as.character(services$reneging_time)
-
-services$end_time[services$status == "reneged"] <- services$reneging_time[services$status == "reneged"]
-services$reneging_time <- NULL
 
 # waiting_time
 services$waiting_time <- diferenca_em_segundos(services$start_time, services$arrival_time)
@@ -112,18 +42,12 @@ services$service_time <- diferenca_em_segundos(services$end_time, services$start
 services$arrival_time_secs <- diferenca_em_segundos(hora_depois = services$arrival_time)
 services$start_time_secs <- diferenca_em_segundos(hora_depois = services$start_time)
 
-
 # remove services com waiting_time menor que zero. Nao ha como obter informacoes relevantes nessa situacao,
 # pois o cliente nao foi ao menos chamado.
 services <- subset(services, services$waiting_time >= 0)
 
 # substitui por zero service_time negativos.
 services$service_time[services$service_time < 0] <- 0
-
-# mudar todos com status started para reneged.
-services$status[services$status == 'started'] <- 'reneged'
-
-# agora so existem atendimentos finalizados ou que desistiram.
 
 # time_overflow <- alvo
 services$time_overflow <- FALSE
@@ -150,25 +74,6 @@ services <- merge(services, history, all.x = TRUE)
 for (i in 1:nrow(services)) {
   services$yesterday_count[i] <- trunc(mean(history$yesterday_count[history$branch_id == services$branch_id[i]]))
 }
-
-
-# retirar filas que tiveram mais de um atendente.
-cashiers <- unique(data.frame(date = services$date,
-                              branch_id = services$branch_id, 
-                              queue_id = services$queue_id, 
-                              cashier = services$cashier))
-
-
-cashiers <- aggregate(x=cashiers$cashier, by = list(date = cashiers$date,
-                                                    branch_id = cashiers$branch_id,
-                                                    queue_id = cashiers$queue_id), FUN=length)
-
-cashiers <- cashiers[cashiers$x == 1,]
-cashiers$x <- NULL
-
-services <- merge(services, cashiers)
-
-# agora so existem filas que tem um caixa.
 
 # ordena atendimentos
 services <- services[order(services$date, 
@@ -237,8 +142,6 @@ for (i in 1:nrow(services)) {
      services$les[i] <- not_served$waiting_time[nrow(not_served)]
    }
       
-   
-
    # queue: as pessoas que estao na minha frente sao aquelas que chegaram antes de mim, i.e.,
    #        sequence menor que o meu e que ainda nao foram atendidas no momento que eu cheguei
    queue <- services[services$date == services$date[i] &
@@ -334,26 +237,70 @@ services$branch_n_queue <- paste(services$branch_id, "_", services$queue_id, sep
 # removendo outliers
 services <- services[services$interarrival_time >= 0,]
 
-## separar services_fit em treinamento (60%), validacao (20%) e teste (20%)
+# executar testes de aderencia a fim de verificar se filas possuem pressupostos da teoria de filas.
+# os pressupostos sao que as metricas interarrival_time e service_time sigam a distribuicao
+# exponencial.
+queues <- unique(data.frame(branch_n_queue = services$branch_n_queue, date = services$date))
+queues$MM1_fit <- FALSE
+
+for (i in 1:nrow(queues)) {
+  arrival_fit <- FALSE
+  service_fit <- FALSE
+  
+  temp <- services[services$branch_n_queue == queues$branch_n_queue[i] &
+                     services$date == queues$date[i],]
+  
+  ## testando interarrival_rate
+  fit <- fitdistr(temp$interarrival_time, "exponential")
+  test <-  ks.test(temp$interarrival_time, "pexp", fit$estimate)  
+  if (test$p.value > 0.05) {
+    arrival_fit <- TRUE
+  }
+  ## testando service_time
+  fit <- fitdistr(temp$service_time, "exponential")
+  test <-  ks.test(temp$service_time, "pexp", fit$estimate)  
+  if (test$p.value > 0.05) {
+    service_fit <- TRUE
+  }
+  
+  if (arrival_fit == TRUE & service_fit == TRUE) {
+    queues$MM1_fit[i] <- TRUE
+  }
+}
+
+# selecionar somente filas que atendem os pressupostos de teoria de filas.
+services <- merge(services, queues[queues$MM1_fit == TRUE,])
+services$MM1_fit <- NULL
+
+## separar services_fit em treinamento (70%) e teste (30%)
 set.seed(1980)
-services$set <- sample.int(n = 3, size = nrow(services), replace = TRUE, prob = c(.6, .2, .2))
+services$set <- sample.int(n = 2, size = nrow(services), replace = TRUE, prob = c(.7, .3))
+services$set[services$set == 1] <- 'train'
+services$set[services$set == 2] <- 'test'
 
 ## agora tem que preparar o data frame de análise, tirando os campos desnecessarios
-services_fit <- services[,c(13, 16, 19, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 18, 39)]
+services_fit <- services[,c("arrival_rate", "arrival_time_secs", "avg_service_time", 
+                            "clients_count", "companies_count", "hol", "interarrival_time", 
+                            "les", "non_clients_count", "non_companies_count", 
+                            "non_priorities_count", "peak_hour", "priorities_count", 
+                            "queue_length", "rcs", "service_rate", "service_type", "tol", 
+                            "utilization_factor", "yesterday_count", "time_overflow", "set")]
 
-services_training <- services_fit[services_fit$set == 1,]
-services_validation <- services_fit[services_fit$set == 2,]
-services_test <- services_fit[services_fit$set == 3,]
+services_training <- services_fit[services_fit$set == 'train',]
+services_test <- services_fit[services_fit$set == 'test',]
 
-# fazer undersampling pois a classe time_overflow = TRUE eh rara (< 20%) e quero privilegia-la.
-services_training_TRUE <- services_training[services_training$time_overflow == TRUE,]
-services_training_FALSE <- services_training[services_training$time_overflow == FALSE,]
-services_training_FALSE <- services_training_FALSE[sample(nrow(services_training_FALSE), nrow(services_training_TRUE)),]
-services_training <- rbind(services_training_FALSE, services_training_TRUE)
+# fazer oversampling pois a classe time_overflow = TRUE eh rara (< 20%) e quero privilegia-la.
+stf <- services_training[services_training$time_overflow == FALSE,]
+stt <- services_training[services_training$time_overflow == TRUE,]
+set.seed(1980)
+stt <- stt[sample(nrow(stt), nrow(stf), replace=TRUE),]
+
+services_training <- rbind(stf, stt)
 
 # junta tudo de novo
-services_fit <- rbind(services_training, services_validation, services_test)
+services_fit_oversampled <- rbind(services_training, services_test)
 
 # grava csvs
-write.csv(services_fit, file = "/home/publico/mestrado/mineracao/raw/gat/services_fit.csv", row.names = FALSE)
-write.csv(services, file = "/home/publico/mestrado/mineracao/raw/gat/services_full.csv", row.names = FALSE)
+write.csv(services_fit_oversampled, file = "/home/mourao/queueing_delay_prediction/data/services_fit_over.csv", row.names = FALSE)
+# write.csv(services_fit, file = "/home/mourao/queueing_delay_prediction/services_fit.csv", row.names = FALSE)
+write.csv(services, file = "/home/mourao/queueing_delay_prediction/data/services_full.csv", row.names = FALSE)
